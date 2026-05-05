@@ -202,6 +202,58 @@ lands.
 
 ---
 
+### 5. `adbc_get_info` NPEs in upstream `GetInfoMetadataReader` (Arrow client bug)
+
+**Symptom.** Calling `getInfo()` through the FlightSQL ADBC client crashes
+client-side before any data reaches the caller:
+
+```
+java.lang.NullPointerException: Cannot invoke "VectorLoader.load(...)" because "this.loader" is null
+  at org.apache.arrow.vector.ipc.ArrowReader.loadRecordBatch(ArrowReader.java:213)
+  at org.apache.arrow.adbc.driver.flightsql.BaseFlightReader.loadRoot(BaseFlightReader.java:149)
+  at org.apache.arrow.adbc.driver.flightsql.GetInfoMetadataReader.loadNextBatch(GetInfoMetadataReader.java:173)
+```
+
+The same shape from Python (`adbc_driver_flightsql.dbapi.Connection.adbc_get_info`)
+manifests as a hard ADBC error.
+
+**Reproducer (Kotlin, against any XTDB nightly):**
+
+```kotlin
+val al = RootAllocator()
+val db = FlightSqlDriver(al).open(mapOf("uri" to "grpc+tcp://127.0.0.1:9833"))
+db.connect().use { conn ->
+    conn.getInfo().use { rdr ->
+        rdr.loadNextBatch()    // NPE
+    }
+}
+```
+
+**Diagnosis.** Not an XTDB-side bug. `XtdbProducer.getStreamSqlInfo` returns
+the canonical FlightSQL `GET_SQL_INFO_SCHEMA` with two rows
+(`FLIGHT_SQL_SERVER_NAME`, `FLIGHT_SQL_SERVER_VERSION`) — the wire response
+verifies fine via raw FlightSQL (`FlightSqlClient.getSqlInfo` works in the
+core test suite). The crash is in Arrow's
+`adbc-driver-flightsql:GetInfoMetadataReader`, which allocates a fresh output
+VSR but never initialises its `VectorLoader` before calling `loadRoot`.
+First flagged in xtdb/xtdb #d6705d512a as
+*"GetInfoMetadataReader.processRootFromStream allocates on the wrong root"*.
+
+**Impact.** Any non-trivial ADBC client that probes `getInfo()` for vendor /
+driver metadata gets a hard error. Most clients call this during connection
+setup, so the failure can surface before the user runs a single query.
+In-process JVM ADBC (`XtdbConnection.getInfo()`) is unaffected — that path
+emits all four ADBC info codes correctly (xtdb/xtdb#5553).
+
+**Server-side ask.** None (verify periodically — once Apache Arrow ADBC fixes
+the loader-init path the wire route should start working without changes
+here).
+
+**Test coverage.** Captured indirectly via xtdb/xtdb#5553 — the closing
+comment includes the full Kotlin repro.
+
+---
+
 ## Resolved
 
 ### `AdbcStatement.prepare()` and `get_parameter_schema` not implemented
