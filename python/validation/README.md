@@ -28,45 +28,50 @@ XTDB_FLIGHT_SQL_URI=grpc://localhost:9833 \
   venv/bin/python -m pytest validation/tests/ -q --tb=no
 ```
 
-## Current status (XTDB nightly `75472e4`, validation suite HEAD)
+## Current status (XTDB nightly w/ xtdb/xtdb#5526 + #5554, validation suite HEAD)
 
 | bucket | count |
 |---|---|
-| passed | 16 |
-| skipped (declared-unsupported feature) | 77 |
-| failed | 49 |
-| errored (setup) | 13 |
+| passed | 100 |
+| skipped (declared-unsupported feature) | 80 |
+| failed | 47 |
+| errored (setup) | 14 |
+
+Up from 16 / 77 / 49 / 13 once `statement_prepare` and
+`statement_get_parameter_schema` flip on (see `xtdb.py`). The +84-pass jump
+is mostly downstream of `prepare()` — the suite's `try_drop_table` quirk
+prepares under the hood, so any test touching it errored before #5526 made
+prepare a real operation.
 
 ### Failure categories
 
-1. **`CREATE TABLE` / standard DDL not supported** — drives most
-   `test_connection.py::test_get_objects_*` errors and the 13-case
-   `type/select/*` failures. XTDB has implicit tables; every row requires
-   `_id`. Each base fixture needs a per-driver `.txtcase` override (see
-   `queries/type/select/int32.txtcase` for the pattern).
-2. **Value-level dynamic typing** — `INT` columns that declare `int32` come
-   back as `int64` because XTDB promotes numeric literals. The suite's
-   schema-strict comparator rejects this. Either the override widens the
-   expected schema to int64, or the server preserves declared widths.
-3. **`GetCurrentCatalog` / `GetCurrentDbSchema` not wired** — see
-   [`adbc-bugs.md`](../../adbc-bugs.md) #3.
-4. **`AdbcStatement.prepare()` returns INTERNAL** — covers the 3 statement
-   failures (`test_prepare`, `test_parameter_execute`, `test_parameter_schema`)
-   and bubbles through `try_drop_table` (which prepares under the hood). This
-   matches the "must-have for release" item on xtdb/xtdb#5132.
-5. **`type/bind/*` — parameter-binding type coverage** — 28 cases. Need
-   targeted probes to split these into driver/server/suite layers.
+1. **`type/bind/*` — parameter-binding type coverage (28 cases)** — single
+   biggest cluster. Splits into suite-side feature gaps and server-side type
+   coercion. Needs targeted probes to apportion blame.
+2. **`type/select/*` — schema-strict comparisons (13 cases)** — `INT`
+   columns declared as `int32` come back as `int64` because XTDB's planner
+   promotes numeric literals. Either the override widens the expected schema
+   to int64, or the server preserves declared widths. `type/literal/*` (2
+   cases) is the same shape.
+3. **`test_get_objects_column_*` — IPC encoding on column-depth GetObjects
+   (12 errors + 1 failure)** — column-depth `GetObjects` returns malformed
+   Arrow IPC. See [`adbc-bugs.md`](../../adbc-bugs.md) #1.
+4. **`test_parameter_execute` — multi-row params (1 failure)** — sending 4
+   rows of bound parameters expects 4 rows of result; XTDB executes once
+   against the first row. Server/FSQL-side; tracked on xtdb/xtdb#5132.
+5. **`test_execute_schema_noalias` — `adbc_execute_schema` (1 error)** —
+   not implemented; declared-unsupported in `xtdb.py`.
 
 ### Paths to reduce the failure count
 
 - Fast win: override a handful of `type/select/*.txtcase` to use
   `INSERT RECORDS` + widen expected schemas. This bumps the pass rate without
   server changes.
-- Medium: override the `get_objects_table` fixture so it doesn't call
-  `drop_table` (XTDB uses `ERASE`).
-- Server-side: fix `AdbcStatement.prepare` and wire
-  `GetCurrentCatalog`/`GetCurrentDbSchema`. Both are explicitly tracked on
-  xtdb/xtdb#5132.
+- Server-side: fix the column-depth `GetObjects` IPC encoding (one cluster
+  unblocks 13 cases) and tighten declared-width preservation. Both tracked
+  under xtdb/xtdb#5132.
+- Server-side: implement the multi-row params expansion path so a 4-row
+  bound batch produces 4 result rows.
 
 ## Not submoduled
 

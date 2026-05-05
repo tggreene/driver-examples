@@ -92,7 +92,7 @@ internally. Tracked in xtdb/xtdb#5082.
 
 ---
 
-### 3. Parser errors surface as `INTERNAL` (Prepare) instead of `INVALID_ARGUMENT`
+### 3. Parser errors classified as `INTERNAL` instead of `INVALID_ARGUMENT`
 
 **Symptom.** Syntactically-unrecognized SQL — e.g. `DROP TABLE IF EXISTS t`,
 which XTDB has no parser rule for — comes back from ADBC as:
@@ -128,6 +128,10 @@ message.
 
 **Test coverage.** Visible in `python/validation/tests/` under the
 `test_get_objects_*` errors.
+
+**Note.** `AdbcStatement.prepare()` itself is now functional — see Resolved
+below. This issue is specifically about how parser errors are *classified*
+once prepare reaches them.
 
 ---
 
@@ -200,7 +204,25 @@ lands.
 
 ## Resolved
 
-*(none yet — this file is brand new)*
+### `AdbcStatement.prepare()` and `get_parameter_schema` not implemented
+
+`prepare()` was a TODO on the in-process ADBC path and the FlightSQL
+prepared-statement DoGet/DoPut/DoAction handlers had a parallel
+implementation that didn't match. Both are now wired:
+
+- xtdb/xtdb#5526 — in-process `XtdbStatement.prepare()` + bind/execute
+  lifecycle.
+- xtdb/xtdb#5554 — FSQL prepared-statement callbacks delegate to
+  `XtdbStatement` rather than maintaining their own copy.
+
+`statement_prepare` and `statement_get_parameter_schema` flip from `False`
+to `True` in `validation/xtdb.py` once both land. Validation suite passes
+jump 16 → 100 — most of the gain is downstream of `prepare()` since the
+suite's `try_drop_table` quirk prepares under the hood, so any test
+touching it errored before the fix.
+
+The classification angle in #3 (parser errors → `INTERNAL`) is separate
+and remains open.
 
 ---
 
@@ -208,11 +230,11 @@ lands.
 
 - Non-JVM clients use the stock Apache ADBC FlightSQL driver (Go/C/Python/C#).
   There is no bespoke XTDB ADBC driver outside the JVM.
-- In-process JVM ADBC is a separate codepath with its own residual items on
-  issue #5132 (e.g. `AdbcStatement.prepare()` still a TODO). This file
-  focuses on over-the-wire FlightSQL issues visible to non-JVM clients.
+- In-process JVM ADBC and over-the-wire FlightSQL share most of the
+  prepared-statement codepath now (xtdb/xtdb#5554). Residual ADBC items
+  still tracked under issue #5132.
 - Conformance target is
   [adbc-drivers/validation](https://github.com/adbc-drivers/validation). Wired
   into this repo under `python/validation/` — see
   [`python/validation/README.md`](python/validation/README.md) for the
-  16 pass / 49 fail / 77 skip / 13 error breakdown and failure categories.
+  100 pass / 47 fail / 80 skip / 14 error breakdown and failure categories.
