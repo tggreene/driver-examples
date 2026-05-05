@@ -41,10 +41,8 @@ class XtdbQuirks(model.DriverQuirks):
         statement_get_parameter_schema=True,
         statement_prepare=True,
         statement_rows_affected=False,
-        # XTDB's FlightSQL server does not yet expose GetCurrentCatalog /
-        # GetCurrentDbSchema over the wire — see adbc-bugs.md #3.
-        current_catalog=None,
-        current_schema=None,
+        current_catalog="xtdb",
+        current_schema="public",
         supported_xdbc_fields=[],
         quirk_foundry=False,
     )

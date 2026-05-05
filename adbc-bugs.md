@@ -169,40 +169,7 @@ surfaces this already as `NotSupportedError`.
 
 ---
 
-### 4. `GetCurrentCatalog` / `GetCurrentDbSchema` not exposed over FlightSQL
-
-**Symptom.**
-
-```
-ProgrammingError: NOT_FOUND: [Flight SQL] failed to get current catalog:
-  Not Found: [Flight SQL] current catalog not supported
-```
-
-Same for `adbc_current_db_schema`.
-
-**Reproducer.**
-
-```python
-import adbc_driver_flightsql.dbapi as f
-c = f.connect("grpc://xtdb:9833")
-c.adbc_current_catalog       # raises
-c.adbc_current_db_schema     # raises
-```
-
-**Impact.** Clients that auto-scope DDL/DML to the current catalog/schema (e.g.
-DBeaver, Tableau) get a hard error rather than falling back. Per jarohen's
-comment on xtdb/xtdb#5132 these were part of the stage-4 work; the landed
-changes appear to cover `GetObjects`/`GetInfo` but not the FlightSQL
-`CommandGetCurrentCatalog` / `CommandGetCurrentDbSchema` extensions.
-
-**Test coverage.** Captured implicitly — `validation/xtdb.py` sets
-`current_catalog=None`/`current_schema=None` so the validation suite does not
-assert specific values. Flip back to the real values once server-side support
-lands.
-
----
-
-### 5. `adbc_get_info` NPEs in upstream `GetInfoMetadataReader` (Arrow client bug)
+### 4. `adbc_get_info` NPEs in upstream `GetInfoMetadataReader` (Arrow client bug)
 
 **Symptom.** Calling `getInfo()` through the FlightSQL ADBC client crashes
 client-side before any data reaches the caller:
@@ -276,6 +243,27 @@ touching it errored before the fix.
 The classification angle in #3 (parser errors → `INTERNAL`) is separate
 and remains open.
 
+### `adbc_current_catalog` / `adbc_current_db_schema` not exposed over FlightSQL
+
+The Go-driver-based ADBC clients (Python / C / R) read `adbc_current_catalog`
+and `adbc_current_db_schema` by querying FlightSQL session options under the
+well-known keys `catalog` and `schema`. `XtdbProducer` didn't override
+`getSessionOptions`, so the calls came back `UNIMPLEMENTED` and the driver
+surfaced "current catalog not supported".
+
+Wired up on branch `tim/adbc-session-options` — `XtdbProducer.getSessionOptions`
+now reads `getCurrentCatalog()` / `getCurrentDbSchema()` from the per-database
+default connection. Once it lands, `validation/xtdb.py` flips `current_catalog` /
+`current_schema` from `None` to `"xtdb"` / `"public"` and the suite's
+`test_current_catalog` actively asserts both.
+
+The Java FlightSqlConnection ADBC client (0.23) doesn't query these (it
+inherits the AdbcConnection default which throws `notImplemented`), so the
+Java wire path stays unsupported until upstream wires it up. `setSessionOptions`
+isn't implemented either — XtdbProducer has no per-session state, so accepting
+a set would mutate the shared default connection's catalog visible to other
+callers.
+
 ---
 
 ## Notes
@@ -289,4 +277,4 @@ and remains open.
   [adbc-drivers/validation](https://github.com/adbc-drivers/validation). Wired
   into this repo under `python/validation/` — see
   [`python/validation/README.md`](python/validation/README.md) for the
-  100 pass / 47 fail / 80 skip / 14 error breakdown and failure categories.
+  102 pass / 45 fail / 80 skip / 14 error breakdown and failure categories.

@@ -32,9 +32,9 @@ XTDB_FLIGHT_SQL_URI=grpc://localhost:9833 \
 
 | bucket | count |
 |---|---|
-| passed | 100 |
+| passed | 102 |
 | skipped (declared-unsupported feature) | 80 |
-| failed | 47 |
+| failed | 45 |
 | errored (setup) | 14 |
 
 Up from 16 / 77 / 49 / 13 once `statement_prepare` and
